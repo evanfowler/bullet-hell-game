@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bullet Hell Game with Scoring</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        overflow: hidden;
+        background: #111;
+      }
+      canvas {
+        display: block;
+        margin: 0 auto;
+        background: #222;
+      }
+      .overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        flex-direction: column;
+        gap: 20px;
+        background: rgba(0, 0, 0, 0.8);
+        color: white;
+        font-family: Arial, sans-serif;
+        z-index: 10;
+      }
+      button {
+        padding: 15px 30px;
+        font-size: 20px;
+        border: none;
+        border-radius: 10px;
+        cursor: pointer;
+        background: cyan;
+        color: black;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="menu" class="overlay">
+      <h1>Bullet Hell Game</h1>
+      <button id="startButton">Start Game</button>
+    </div>
+
+    <div id="gameOver" class="overlay" style="display: none">
+      <h1>Game Over</h1>
+      <h2 id="finalScore">Score: 0</h2>
+      <button id="restartButton">Restart</button>
+    </div>
+
+    <div
+      id="scoreDisplay"
+      style="
+        position: absolute;
+        top: 20px;
+        left: 20px;
+        color: white;
+        font-size: 24px;
+        font-family: Arial, sans-serif;
+        z-index: 5;
+      "
+    >
+      Score: 0
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+      const canvas = document.getElementById('gameCanvas');
+      const ctx = canvas.getContext('2d');
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+
+      const menu = document.getElementById('menu');
+      const gameOverScreen = document.getElementById('gameOver');
+      const startButton = document.getElementById('startButton');
+      const restartButton = document.getElementById('restartButton');
+      const scoreDisplay = document.getElementById('scoreDisplay');
+      const finalScore = document.getElementById('finalScore');
+
+      let gameRunning = false;
+      const keys = {},
+        bullets = [],
+        enemies = [],
+        particles = [];
+      let enemySpawnInterval,
+        score = 0;
+
+      const player = {
+        x: canvas.width / 2,
+        y: canvas.height / 2,
+        radius: 15,
+        speed: 3,
+      };
+
+      class Bullet {
+        constructor(x, y, angle) {
+          this.x = x;
+          this.y = y;
+          this.radius = 5;
+          this.speed = 7;
+          this.angle = angle;
+        }
+        update() {
+          this.x += Math.cos(this.angle) * this.speed;
+          this.y += Math.sin(this.angle) * this.speed;
+        }
+        draw() {
+          ctx.fillStyle = 'white';
+          ctx.beginPath();
+          ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      class Enemy {
+        constructor() {
+          const edge = Math.floor(Math.random() * 4);
+          if (edge === 0) {
+            this.x = Math.random() * canvas.width;
+            this.y = 0;
+          } else if (edge === 1) {
+            this.x = canvas.width;
+            this.y = Math.random() * canvas.height;
+          } else if (edge === 2) {
+            this.x = Math.random() * canvas.width;
+            this.y = canvas.height;
+          } else {
+            this.x = 0;
+            this.y = Math.random() * canvas.height;
+          }
+          this.radius = 20;
+          this.speed = 1.5;
+        }
+        update() {
+          const angle = Math.atan2(player.y - this.y, player.x - this.x);
+          this.x += Math.cos(angle) * this.speed;
+          this.y += Math.sin(angle) * this.speed;
+        }
+        draw() {
+          ctx.fillStyle = 'red';
+          ctx.beginPath();
+          ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      class Particle {
+        constructor(x, y, color) {
+          this.x = x;
+          this.y = y;
+          this.radius = Math.random() * 3 + 2;
+          this.life = 30;
+          this.color = color;
+          this.speedX = (Math.random() - 0.5) * 4;
+          this.speedY = (Math.random() - 0.5) * 4;
+        }
+        update() {
+          this.x += this.speedX;
+          this.y += this.speedY;
+          this.life--;
+        }
+        draw() {
+          ctx.globalAlpha = this.life / 30;
+          ctx.fillStyle = this.color;
+          ctx.beginPath();
+          ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.globalAlpha = 1;
+        }
+      }
+
+      let blastCharge = 100; // 100% means fully charged
+      let canUseBlast = true;
+      let blastActive = false;
+      let blastRadius = 0;
+
+      function drawBlastWave() {
+        if (blastActive) {
+          ctx.fillStyle = `rgba(255, 255, 0, ${1 - blastRadius / 150})`;
+          ctx.beginPath();
+          ctx.arc(player.x, player.y, blastRadius, 0, Math.PI * 2);
+          ctx.fill();
+
+          blastRadius += 5;
+          if (blastRadius >= 150) {
+            blastActive = false;
+          }
+        }
+      }
+
+      function useBlastWave() {
+        if (canUseBlast) {
+          blastActive = true;
+          blastRadius = 0;
+          canUseBlast = false;
+          blastCharge = 0;
+
+          let chargeInterval = setInterval(() => {
+            if (blastCharge < 100) {
+              blastCharge += 1;
+            } else {
+              clearInterval(chargeInterval);
+              canUseBlast = true;
+            }
+          }, 30); // Charge up gradually over 3 seconds
+        }
+      }
+
+      function updateBlastWave() {
+        if (blastActive) {
+          enemies.forEach((e, i) => {
+            if (Math.hypot(e.x - player.x, e.y - player.y) < blastRadius) {
+              enemies.splice(i, 1);
+            }
+          });
+        }
+      }
+
+      window.addEventListener('keydown', (e) => {
+        if (e.key === ' ') useBlastWave();
+      });
+
+      function spawnEnemy() {
+        if (gameRunning) enemies.push(new Enemy());
+      }
+
+      function updatePlayer() {
+        if (keys['w'] || keys['ArrowUp']) player.y -= player.speed;
+        if (keys['s'] || keys['ArrowDown']) player.y += player.speed;
+        if (keys['a'] || keys['ArrowLeft']) player.x -= player.speed;
+        if (keys['d'] || keys['ArrowRight']) player.x += player.speed;
+        player.x = Math.max(
+          player.radius,
+          Math.min(canvas.width - player.radius, player.x)
+        );
+        player.y = Math.max(
+          player.radius,
+          Math.min(canvas.height - player.radius, player.y)
+        );
+      }
+
+      function detectCollisions() {
+        enemies.forEach((e) => {
+          if (
+            Math.hypot(e.x - player.x, e.y - player.y) <
+            e.radius + player.radius
+          )
+            gameOver();
+        });
+      }
+
+      function gameOver() {
+        gameRunning = false;
+        clearInterval(enemySpawnInterval);
+        gameOverScreen.style.display = 'flex';
+        finalScore.innerText = 'Score: ' + score;
+      }
+
+      function update() {
+        if (!gameRunning) return;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        updatePlayer();
+        ctx.fillStyle = 'cyan';
+        ctx.beginPath();
+        ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+        ctx.fill();
+        bullets.forEach((b, i) => {
+          b.update();
+          b.draw();
+          if (b.x < 0 || b.x > canvas.width || b.y < 0 || b.y > canvas.height)
+            bullets.splice(i, 1);
+        });
+        enemies.forEach((e, i) => {
+          e.update();
+          e.draw();
+          bullets.forEach((b, j) => {
+            if (Math.hypot(e.x - b.x, e.y - b.y) < e.radius + b.radius) {
+              for (let k = 0; k < 10; k++)
+                particles.push(new Particle(e.x, e.y, 'orange'));
+              enemies.splice(i, 1);
+              bullets.splice(j, 1);
+              score += 100;
+              spawnEnemy();
+            }
+          });
+        });
+        particles.forEach((p, i) => {
+          p.update();
+          p.draw();
+          if (p.life <= 0) particles.splice(i, 1);
+        });
+        detectCollisions();
+        scoreDisplay.innerText = 'Score: ' + score;
+
+        updateBlastWave();
+        drawBlastWave();
+
+        scoreDisplay.innerHTML = `Score: ${score}<br>Blast Charge: ${blastCharge}%`;
+        requestAnimationFrame(update);
+      }
+
+      startButton.onclick = restartButton.onclick = () => {
+        gameRunning = true;
+        score = 0;
+        enemies.length = bullets.length = particles.length = 0;
+        player.x = canvas.width / 2;
+        player.y = canvas.height / 2;
+        menu.style.display = 'none';
+        gameOverScreen.style.display = 'none';
+        enemySpawnInterval = setInterval(spawnEnemy, 1000);
+        update();
+      };
+      window.addEventListener('keydown', (e) => (keys[e.key] = true));
+      window.addEventListener('keyup', (e) => (keys[e.key] = false));
+      window.addEventListener('mousedown', (e) => {
+        if (gameRunning)
+          bullets.push(
+            new Bullet(
+              player.x,
+              player.y,
+              Math.atan2(e.clientY - player.y, e.clientX - player.x)
+            )
+          );
+      });
+    </script>
+  </body>
+</html>
